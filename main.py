@@ -122,6 +122,8 @@ def main():
 
     async def _run():
         await sm.start_all()
+        oi_tracker.background_start(symbols)
+        
         last_hc = time.time() - 20.0
         streams_st = None
         while not STOP:
@@ -139,11 +141,6 @@ def main():
                     log.error(f"[main] healthcheck failed: {e}", exc_info=True)
 
             try:
-                await asyncio.to_thread(oi_tracker.poll, symbols)
-            except Exception as e:
-                log.error(f"[main] oi_tracker poll failed: {e}", exc_info=True)
-
-            try:
                 eng.tick()   # периодический пересчёт метрик и трекинг forward-return
             except Exception as e:
                 log.error(f"[main] tick failed: {e}", exc_info=True)
@@ -153,6 +150,7 @@ def main():
                 log.error(f"[main] dash failed: {e}", exc_info=True)
 
         try:
+            oi_tracker.background_stop()
             await sm.stop_all()
         except Exception as e:
             log.error(f"[main] stop_all failed: {e}", exc_info=True)
