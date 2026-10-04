@@ -4,8 +4,8 @@ services:
     runtime: python
     region: frankfurt
     plan: free
-    buildCommand: "poetry install --no-root"
-    startCommand: "poetry run python main.py"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -13,5 +13,7 @@ services:
         value: INFO
       - key: DASH_ENABLED
         value: "true"
+      - key: DASH_HOST
+        value: "0.0.0.0"
       - key: STRICT_INTEGRITY
         value: "false"

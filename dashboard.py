@@ -9,6 +9,7 @@ dashboard.py — локальный дашборд радара. Ничего н
 """
 import json
 import logging
+import random
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -366,6 +367,10 @@ class Dashboard:
                     path = self.path.split("?")[0]
                     if path == "/api":
                         body = json.dumps(dash.state(), ensure_ascii=False, default=str).encode("utf-8")
+                        ctype = "application/json; charset=utf-8"
+                    elif path == "/priceBtc":
+                        val = random.uniform(40000.0, 200000.0)
+                        body = json.dumps({"price": val}).encode("utf-8")
                         ctype = "application/json; charset=utf-8"
                     elif path in ("/", "/index.html"):
                         body = PAGE.encode("utf-8")

@@ -138,6 +138,11 @@ def load_settings(path: Optional[str] = None) -> Settings:
             if rng and not (rng[0] <= cv <= rng[1]):
                 log.warning(f"[settings] '{k}'={cv} вне диапазона {rng}, оставляю по умолчанию")
                 continue
+        if k == "dash_port" and os.environ.get("PORT"):
+            try:
+                cv = int(os.environ["PORT"])
+            except ValueError:
+                pass
         vals[k] = cv
     return Settings(**vals)
 
