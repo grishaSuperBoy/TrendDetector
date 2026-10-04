@@ -5,6 +5,7 @@ stream.py — WebSocket-стримы Binance Futures:
   3. Ликвидации !forceOrder@arr (один глобальный сокет).
 """
 import asyncio
+from datetime import datetime, timezone, timedelta
 import json
 import logging
 import time
@@ -15,6 +16,28 @@ import websockets
 from models import OrderBookDepth5, LiquidationEvent
 
 log = logging.getLogger("stream")
+
+# ---------------------------------------------------------------------------
+# Daily scheduled reconnect helper
+# Binance WebSocket connections are capped at 24h server-side.
+# We proactively reconnect at 02:23 UTC — far from all funding settlements
+# (00:00 / 08:00 / 16:00 UTC) and not aligned with any 1h or 15m candle open.
+# ---------------------------------------------------------------------------
+_DAILY_RECONNECT_HOUR = 2
+_DAILY_RECONNECT_MINUTE = 23
+
+
+def _secs_until_daily_reconnect() -> float:
+    """Seconds until next 02:23 UTC (always positive, max ~24h)."""
+    now = datetime.now(timezone.utc)
+    target = now.replace(
+        hour=_DAILY_RECONNECT_HOUR, minute=_DAILY_RECONNECT_MINUTE,
+        second=0, microsecond=0,
+    )
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
 
 
 class BaseStream:
@@ -67,8 +90,17 @@ class BinanceDepthStream(BaseStream):
                                               max_queue=2000) as ws:
                     self.connected = True
                     log.info(f"[{self.name}] Connected.")
+                    reconnect_in = _secs_until_daily_reconnect()
+                    deadline = time.monotonic() + reconnect_in
                     while self._running:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            log.info(f"[{self.name}] Scheduled daily reconnect at 02:23 UTC. Reconnecting...")
+                            break
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=min(30.0, remaining))
+                        except asyncio.TimeoutError:
+                            continue
                         self.last_msg_ts = time.time()
                         backoff = 3.0
                         self._parse(msg)
@@ -128,8 +160,17 @@ class BinanceAggTradeStream(BaseStream):
                                               max_queue=5000) as ws:
                     self.connected = True
                     log.info(f"[{self.name}] Connected.")
+                    reconnect_in = _secs_until_daily_reconnect()
+                    deadline = time.monotonic() + reconnect_in
                     while self._running:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=90.0)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            log.info(f"[{self.name}] Scheduled daily reconnect at 02:23 UTC. Reconnecting...")
+                            break
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=min(90.0, remaining))
+                        except asyncio.TimeoutError:
+                            continue
                         self.last_msg_ts = time.time()
                         backoff = 3.0
                         self._parse(msg)
@@ -173,8 +214,17 @@ class BinanceLiquidationStream(BaseStream):
                                               max_queue=2000) as ws:
                     self.connected = True
                     log.info(f"[{self.name}] Connected.")
+                    reconnect_in = _secs_until_daily_reconnect()
+                    deadline = time.monotonic() + reconnect_in
                     while self._running:
-                        raw = await ws.recv()
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            log.info(f"[{self.name}] Scheduled daily reconnect at 02:23 UTC. Reconnecting...")
+                            break
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=min(30.0, remaining))
+                        except asyncio.TimeoutError:
+                            continue
                         self.last_msg_ts = time.time()
                         self._parse(raw)
             except asyncio.CancelledError:
