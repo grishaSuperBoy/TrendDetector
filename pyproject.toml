@@ -1,0 +1,18 @@
+[project]
+name = "trend-detector"
+version = "0.2.0"
+description = "Binance-only Order Flow Toxicity & Trend Ignition Radar"
+authors = [{name = "Developer"}]
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "websockets (>=13.0,<15.0)",
+    "python-dotenv (>=1.0.0,<2.0.0)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: trend-detector
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: "poetry install --no-root"
+    startCommand: "poetry run python main.py"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DASH_ENABLED
+        value: "true"
+      - key: STRICT_INTEGRITY
+        value: "false"
