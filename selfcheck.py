@@ -41,6 +41,8 @@ def test_settings():
           s.toxic_min_vol_usd == 1_000_000 and s.breadth_hot_min == 7)
     check("settings: вне диапазона — дефолт",
           s.breadth_move_pp == 40.0, s.breadth_move_pp)
+    check("settings: oi_squeeze_max_drop_pct дефолт -1.0",
+          s.oi_squeeze_max_drop_pct == -1.0)
     open(p, "w").write("{не json")
     check("settings: битый JSON не роняет загрузку", CS.load_settings(p) == CS.Settings())
     shutil.rmtree(d, ignore_errors=True)
@@ -130,6 +132,16 @@ def test_trend_verdict():
     for toxic, d, vol, ret, on, ov, exp, cmt in cases:
         got = TS.trend_verdict(toxic, d, vol, ret, on, ov, S)
         check(f"trend_verdict: {cmt} → {exp or 'пусто'}", got == exp, f"got={got!r}")
+
+    # Проверка OI-фильтра сквизов
+    got_sqz = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=-3.0)
+    check("trend_verdict: trend_fuel + oi_trend=-3 → accumulation", got_sqz == "accumulation", f"got={got_sqz}")
+
+    got_up = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=+2.0)
+    check("trend_verdict: trend_fuel + oi_trend=+2 → trend_fuel", got_up == "trend_fuel", f"got={got_up}")
+
+    got_none = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=None)
+    check("trend_verdict: trend_fuel + oi_trend=None → trend_fuel", got_none == "trend_fuel", f"got={got_none}")
 
 
 # ============================================================ ignition
@@ -329,6 +341,35 @@ def test_integrity():
     shutil.rmtree(d, ignore_errors=True)
 
 
+# ============================================================ oi_tracker
+def test_oi_tracker():
+    from oi_tracker import OITracker
+    tracker = OITracker()
+    # 1. Пустая история -> (None, None)
+    cur, tr = tracker.trend_15m("BTCUSDT")
+    check("oi_tracker: пустая история → (None, None)", cur is None and tr is None)
+
+    # 2. Падающая на 5% за 15 мин -> trend_15m ≈ -5
+    t0 = 1_000_000.0
+    tracker._fetch = lambda sym: 1000.0
+    tracker.poll(["BTCUSDT"], now=t0)
+    tracker._fetch = lambda sym: 950.0
+    tracker.poll(["BTCUSDT"], now=t0 + 900.0)
+    cur, tr = tracker.trend_15m("BTCUSDT", now=t0 + 900.0)
+    check("oi_tracker: падающая на 5% за 15 мин → trend_15m ≈ -5",
+          cur == 950.0 and tr is not None and abs(tr - (-5.0)) < 0.1, f"tr={tr}")
+
+    # 3. Растущая на 5% за 15 мин -> trend_15m ≈ +5
+    tracker2 = OITracker()
+    tracker2._fetch = lambda sym: 1000.0
+    tracker2.poll(["ETHUSDT"], now=t0)
+    tracker2._fetch = lambda sym: 1050.0
+    tracker2.poll(["ETHUSDT"], now=t0 + 900.0)
+    cur2, tr2 = tracker2.trend_15m("ETHUSDT", now=t0 + 900.0)
+    check("oi_tracker: растущая на 5% за 15 мин → trend_15m ≈ +5",
+          cur2 == 1050.0 and tr2 is not None and abs(tr2 - 5.0) < 0.1, f"tr2={tr2}")
+
+
 # ============================================================ main
 def main():
     test_settings()
@@ -344,6 +385,7 @@ def main():
     test_engine_ret_30s()
     test_engine_ignition_context()
     test_engine_robustness()
+    test_oi_tracker()
     test_integrity()
 
     bad = [n for n, ok in RESULTS if not ok]

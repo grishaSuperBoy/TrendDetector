@@ -53,11 +53,13 @@ class OBIEngine:
         lead_exchange: str = "binance",
         symbols: Optional[List[str]] = None,
         settings: Optional[Settings] = None,
+        oi_tracker: Optional[Any] = None,
         **_legacy,
     ):
         self._errors: Dict[str, int] = {}
         self.c: Dict[str, int] = defaultdict(int)
         self.S: Settings = settings or load_settings()
+        self._oi_tracker = oi_tracker
         S = self.S
 
         ok, details = verify_integrity()
@@ -326,13 +328,21 @@ class OBIEngine:
         # чистим старые ignition из recent
         self._recent_ignitions = [e for e in self._recent_ignitions if now - e["ts"] < IGN_RECENT_MAX_AGE_SEC]
 
+    def _oi_trend(self, sym: str, now: Optional[float] = None) -> Tuple[Optional[float], Optional[float]]:
+        if self._oi_tracker is not None:
+            try:
+                return self._oi_tracker.trend_15m(sym, now)
+            except Exception:
+                pass
+        return None, None
+
     # ============================================================ периодический такт
     @_safe
     def tick(self) -> None:
         """Периодическая работа без выгрузки на диск: sweep, recompute, трекинг."""
         now = time.time()
         self._sweep(now)
-        self._toxic.recompute(self._ret_30s, self._ignition_context, self._obi_pair, now)
+        self._toxic.recompute(self._ret_30s, self._ignition_context, self._obi_pair, now, self._oi_trend)
 
         for sig in self._toxic.take_signals():
             sym = sig["symbol"]

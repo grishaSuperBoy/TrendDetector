@@ -18,6 +18,7 @@ import config as C
 from collector_settings import load_settings
 from dashboard import Dashboard
 from engine import OBIEngine
+from oi_tracker import OITracker
 from stream import StreamManager
 import healthcheck
 
@@ -98,7 +99,8 @@ def main():
         log.error("[main] нет символов для подписки — выходим")
         return
 
-    eng = OBIEngine(lead_exchange=C.LEAD_EXCHANGE, symbols=symbols, settings=S)
+    oi_tracker = OITracker()
+    eng = OBIEngine(lead_exchange=C.LEAD_EXCHANGE, symbols=symbols, settings=S, oi_tracker=oi_tracker)
 
     dash = Dashboard(settings=S)
     if S.dash_enabled:
@@ -120,7 +122,7 @@ def main():
 
     async def _run():
         await sm.start_all()
-        last_hc = time.time() - 590.0
+        last_hc = time.time() - 20.0
         streams_st = None
         while not STOP:
             try:
@@ -129,12 +131,17 @@ def main():
                 break
 
             now = time.time()
-            if now - last_hc >= 600.0:
+            if now - last_hc >= 30.0:
                 last_hc = now
                 try:
                     streams_st = healthcheck.check_connections(sm)
                 except Exception as e:
                     log.error(f"[main] healthcheck failed: {e}", exc_info=True)
+
+            try:
+                await asyncio.to_thread(oi_tracker.poll, symbols)
+            except Exception as e:
+                log.error(f"[main] oi_tracker poll failed: {e}", exc_info=True)
 
             try:
                 eng.tick()   # периодический пересчёт метрик и трекинг forward-return

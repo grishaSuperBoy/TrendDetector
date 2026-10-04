@@ -26,7 +26,7 @@ MANIFEST_FILE = "MANIFEST.sha256"
 CORE_FILES = (
     "engine.py", "collector_settings.py", "dashboard.py", "selfcheck.py",
     "models.py", "stream.py", "main.py", "config.py", "toxic_scanner.py",
-    "healthcheck.py",
+    "healthcheck.py", "oi_tracker.py",
 )
 
 
@@ -68,6 +68,9 @@ class Settings:
     # ---- фильтр universe
     min_vol_24h_usd: float = 3_000_000.0   # отсечка по суточному обороту ($). 0 = без фильтра
 
+    # ---- фильтр сквизов по OI
+    oi_squeeze_max_drop_pct: float = -1.0  # порог падения OI за 15 мин для даунгрейда trend_fuel -> accumulation
+
 
 _RANGES = {
     "toxic_alert": (0.5, 0.95),
@@ -86,6 +89,7 @@ _RANGES = {
     "unflushed_cap": (1000, 500000),
     "dash_port": (1024, 65535),
     "min_vol_24h_usd": (0.0, 10_000_000_000.0),
+    "oi_squeeze_max_drop_pct": (-10.0, 0.0),
 }
 
 

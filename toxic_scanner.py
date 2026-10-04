@@ -39,7 +39,8 @@ def _minute(ts: float) -> int:
 def trend_verdict(toxic_1h: float, flow_dir: int, vol_1h_usd: float,
                   ret_30s_bps: Optional[float],
                   obi_now: Optional[float], obi_vel: Optional[float],
-                  settings) -> str:
+                  settings,
+                  oi_trend: Optional[float] = None) -> str:
     """
     trend_fuel   — всё сошлось: toxic + vol + цена в сторону потока + OBI подтверждает
     accumulation — toxic есть, но не trend_fuel
@@ -72,6 +73,10 @@ def trend_verdict(toxic_1h: float, flow_dir: int, vol_1h_usd: float,
             obi_ok = (obi_vel < -obi_vel_min) and (obi_now < -obi_min)
 
     if price_ok and obi_ok:
+        if oi_trend is not None:
+            max_drop = getattr(settings, "oi_squeeze_max_drop_pct", -1.0)
+            if oi_trend < max_drop:
+                return "accumulation"
         return "trend_fuel"
     return "accumulation"
 
@@ -219,7 +224,7 @@ class ToxicScanner:
         return out
 
     def recompute(self, ret_30s_fn, context_fn=None, obi_fn=None,
-                  now: Optional[float] = None) -> None:
+                  now: Optional[float] = None, oi_fn=None) -> None:
         now = now or time.time()
         br = self.breadth()
         long_now = br.get("long_pressure", 0)
@@ -248,14 +253,25 @@ class ToxicScanner:
                 except Exception:
                     pass
 
+            oi_val, oi_trend = None, None
+            if callable(oi_fn):
+                try:
+                    res = oi_fn(sym, now)
+                    if res and len(res) == 2:
+                        oi_val, oi_trend = res
+                except Exception:
+                    pass
+
             ret_bps = None if ret_30s is None else round(float(ret_30s), 2)
             verdict = trend_verdict(m["toxic_1h"], m["flow_dir"], m["vol_1h_usd"],
-                                    ret_bps, obi_now, obi_vel, self.S)
+                                    ret_bps, obi_now, obi_vel, self.S, oi_trend)
             m["verdict"] = verdict
             m["ret_30s_bps"] = ret_bps
             m["obi_now"] = obi_now
             m["obi_vel"] = obi_vel
             m["exchange"] = key[0]
+            m["oi"] = oi_val
+            m["oi_trend_15m"] = oi_trend
 
             self._hist[sym].append((now, m["toxic_1h"]))
 
@@ -269,6 +285,7 @@ class ToxicScanner:
                     "flow_dir": m["flow_dir"], "vol_1h_usd": m["vol_1h_usd"],
                     "ret_30s_bps": m["ret_30s_bps"],
                     "obi_now": obi_now, "obi_vel": obi_vel,
+                    "oi": oi_val, "oi_trend_15m": oi_trend,
                     "_horizons": (1.0, 5.0, 30.0, 60.0, 300.0),
                 })
                 self._prev_verdict[sym] = new_v
@@ -321,6 +338,8 @@ class ToxicScanner:
                 "obi_now": m.get("obi_now"),
                 "obi_vel": m.get("obi_vel"),
                 "verdict": m.get("verdict", ""),
+                "oi": m.get("oi"),
+                "oi_trend_15m": m.get("oi_trend_15m"),
             })
         return out
 
