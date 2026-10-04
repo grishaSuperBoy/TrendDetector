@@ -27,6 +27,7 @@ from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from collector_settings import SCHEMA_VERSION
+from states import CoinState, coin_state as _coin_state
 
 BUCKET_MAXLEN = 250
 METRICS_EVERY_SEC = 10.0
@@ -36,49 +37,6 @@ def _minute(ts: float) -> int:
     return int(ts // 60) * 60
 
 
-def trend_verdict(toxic_1h: float, flow_dir: int, vol_1h_usd: float,
-                  ret_30s_bps: Optional[float],
-                  obi_now: Optional[float], obi_vel: Optional[float],
-                  settings,
-                  oi_trend: Optional[float] = None) -> str:
-    """
-    trend_fuel   — всё сошлось: toxic + vol + цена в сторону потока + OBI подтверждает
-    accumulation — toxic есть, но не trend_fuel
-    ""           — toxic ниже порога или vol ниже минимума
-    """
-    min_vol = getattr(settings, "toxic_min_vol_usd", 0.0)
-    if min_vol > 0.0 and vol_1h_usd < min_vol:
-        return ""
-    if toxic_1h < getattr(settings, "toxic_alert", 0.70):
-        return ""
-    if flow_dir == 0:
-        return "accumulation"
-
-    min_ret = getattr(settings, "toxic_trend_min_ret_bps", 4.0)
-    price_ok = False
-    if ret_30s_bps is not None:
-        r = float(ret_30s_bps)
-        if flow_dir > 0 and r >= min_ret:
-            price_ok = True
-        elif flow_dir < 0 and r <= -min_ret:
-            price_ok = True
-
-    obi_vel_min = getattr(settings, "obi_vel_min", 0.05)
-    obi_min = getattr(settings, "obi_min", 0.15)
-    obi_ok = False
-    if obi_now is not None and obi_vel is not None:
-        if flow_dir > 0:
-            obi_ok = (obi_vel > obi_vel_min) and (obi_now > obi_min)
-        elif flow_dir < 0:
-            obi_ok = (obi_vel < -obi_vel_min) and (obi_now < -obi_min)
-
-    if price_ok and obi_ok:
-        if oi_trend is not None:
-            max_drop = getattr(settings, "oi_squeeze_max_drop_pct", -1.0)
-            if oi_trend < max_drop:
-                return "accumulation"
-        return "trend_fuel"
-    return "accumulation"
 
 
 def ignition_check(toxic_1h: float, dir_: int, vol_1h: float,
@@ -263,9 +221,28 @@ class ToxicScanner:
                     pass
 
             ret_bps = None if ret_30s is None else round(float(ret_30s), 2)
-            verdict = trend_verdict(m["toxic_1h"], m["flow_dir"], m["vol_1h_usd"],
-                                    ret_bps, obi_now, obi_vel, self.S, oi_trend)
-            m["verdict"] = verdict
+            
+            min_vol = getattr(self.S, "toxic_min_vol_usd", 0.0)
+            vol_ok = (min_vol <= 0.0) or (m["vol_1h_usd"] >= min_vol)
+            obi_vel_min = getattr(self.S, "obi_vel_min", 0.05)
+            obi_min_val = getattr(self.S, "obi_min", 0.15)
+            obi_ok = False
+            if obi_now is not None and obi_vel is not None:
+                if m["flow_dir"] > 0:
+                    obi_ok = (obi_vel > obi_vel_min) and (obi_now > obi_min_val)
+                elif m["flow_dir"] < 0:
+                    obi_ok = (obi_vel < -obi_vel_min) and (obi_now < -obi_min_val)
+            state_p = {
+                "alert": getattr(self.S, "toxic_alert", 0.70),
+                "min_ret": getattr(self.S, "toxic_trend_min_ret_bps", 4.0),
+                "oi_drop": getattr(self.S, "oi_squeeze_max_drop_pct", -1.0),
+            }
+            c_state = _coin_state(
+                m["toxic_1h"], m["flow_dir"], vol_ok, ret_bps, obi_ok, oi_trend, state_p
+            ).value
+
+            m["coin_state"] = c_state
+            m["verdict"] = c_state  # map coin_state to verdict for compatibility
             m["ret_30s_bps"] = ret_bps
             m["obi_now"] = obi_now
             m["obi_vel"] = obi_vel
@@ -277,6 +254,14 @@ class ToxicScanner:
 
             prev_v = self._prev_verdict.get(sym, "")
             new_v = m["verdict"]
+            
+            if not hasattr(self, "_state_since"):
+                self._state_since = {}
+            if new_v != prev_v or sym not in self._state_since:
+                self._state_since[sym] = now
+            
+            m["state_age_sec"] = now - self._state_since[sym]
+
             if new_v != prev_v:
                 self._pending_signals.append({
                     "ts": now, "symbol": sym,
@@ -338,6 +323,8 @@ class ToxicScanner:
                 "obi_now": m.get("obi_now"),
                 "obi_vel": m.get("obi_vel"),
                 "verdict": m.get("verdict", ""),
+                "coin_state": m.get("coin_state", "flat"),
+                "state_age_sec": m.get("state_age_sec", 0.0),
                 "oi": m.get("oi"),
                 "oi_trend_15m": m.get("oi_trend_15m"),
             })
@@ -346,14 +333,18 @@ class ToxicScanner:
     def breadth(self) -> Dict[str, Any]:
         """
         long_pressure / short_pressure — по OBI-правилу (ТЗ п.2).
-        trend_fuel / accumulation — по вердиктам.
+        market_state — из states.py (CHOP, LONG_TREND, SHORT_TREND, SQUEEZE_RISK, MIXED)
         diff_pp — разница (long - short) / total * 100.
         """
+        from states import market_state as _market_state, CoinState
         total = len(self._metrics)
         obi_vel_min = getattr(self.S, "obi_vel_min", 0.05)
         obi_min = getattr(self.S, "obi_min", 0.15)
         long_pressure = short_pressure = 0
-        trend_fuel = acc = 0
+        
+        state_counts = {s.value: 0 for s in CoinState}
+        coin_states = []
+        
         for m in self._metrics.values():
             obi_now = m.get("obi_now")
             obi_vel = m.get("obi_vel")
@@ -362,19 +353,30 @@ class ToxicScanner:
                     long_pressure += 1
                 elif obi_vel < -obi_vel_min and obi_now < -obi_min:
                     short_pressure += 1
-            v = m.get("verdict", "")
-            if v == "trend_fuel":
-                trend_fuel += 1
-            elif v == "accumulation":
-                acc += 1
+            
+            c_val = m.get("coin_state", "flat")
+            try:
+                c = CoinState(c_val)
+                coin_states.append(c)
+                state_counts[c.value] += 1
+            except ValueError:
+                pass
+                
         diff_pp = round((long_pressure - short_pressure) / total * 100.0, 1) if total > 0 else 0.0
+        
+        m_state_p = {
+            "trend_frac": getattr(self.S, "trend_frac", 0.4),
+            "squeeze_frac": getattr(self.S, "squeeze_frac", 0.3),
+        }
+        m_state = _market_state(coin_states, m_state_p).value
+        
         return {
             "total": total,
             "long_pressure": long_pressure,
             "short_pressure": short_pressure,
             "diff_pp": diff_pp,
-            "trend_fuel": trend_fuel,
-            "accumulation": acc,
+            "state_counts": state_counts,
+            "market_state": m_state,
             "alert": getattr(self.S, "toxic_alert", 0.70),
             "move_pp": getattr(self.S, "breadth_move_pp", 40.0),
         }

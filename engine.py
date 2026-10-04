@@ -342,6 +342,19 @@ class OBIEngine:
         """Периодическая работа без выгрузки на диск: sweep, recompute, трекинг."""
         now = time.time()
         self._sweep(now)
+        
+        # Раз в 10с вычисляем market_state и логируем при смене
+        if not hasattr(self, "_last_ms_ts") or now - self._last_ms_ts >= 10.0:
+            self._last_ms_ts = now
+            br = self._toxic.breadth()
+            new_ms = br.get("market_state")
+            old_ms = getattr(self, "_last_ms", None)
+            if new_ms and new_ms != old_ms:
+                if old_ms is not None:
+                    log.info(f"MARKET STATE CHANGED: {old_ms} -> {new_ms}")
+                self._last_ms = new_ms
+                self._last_ms_start_ts = now
+        
         self._toxic.recompute(self._ret_30s, self._ignition_context, self._obi_pair, now, self._oi_trend)
 
         for sig in self._toxic.take_signals():
@@ -432,10 +445,14 @@ class OBIEngine:
                 "age_sec": round(now - e["ts"], 1),
                 "ret_bps": ret_bps,
             })
+        br = self._toxic.breadth()
+        if hasattr(self, "_last_ms_start_ts"):
+            br["market_state_age_sec"] = now - self._last_ms_start_ts
+            
         return {
             "health": self.health(),
             "active_ignitions": active_ignitions,
-            "toxic_top": self._toxic.top_by_toxic(20),
-            "toxic_breadth": self._toxic.breadth(),
+            "toxic_top": self._toxic.top_by_toxic(1000),
+            "toxic_breadth": br,
             "lead_exchange": self.lead_exchange,
         }

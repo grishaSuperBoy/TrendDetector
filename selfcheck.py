@@ -109,40 +109,6 @@ def test_toxic_slope():
     check("toxic_slope: растёт → > 0", slope > 0, slope)
 
 
-# ============================================================ trend_verdict
-def test_trend_verdict():
-    S = CS.Settings()
-    cases = [
-        # toxic, dir, vol, ret, obi_now, obi_vel, expected, comment
-        (0.8, +1, 1_000_000, +10.0, +0.3, +0.10, "trend_fuel",   "лонг всё сошлось"),
-        (0.8, -1, 1_000_000, -10.0, -0.3, -0.10, "trend_fuel",   "шорт всё сошлось"),
-        (0.8, +1, 1_000_000, +10.0, +0.3, +0.02, "accumulation", "OBI vel слабый"),
-        (0.8, +1, 1_000_000, +10.0, +0.1, +0.10, "accumulation", "OBI now слабый"),
-        (0.8, +1, 1_000_000, +10.0, -0.2, +0.10, "accumulation", "OBI против"),
-        (0.8, +1, 1_000_000, +10.0, None, None,  "accumulation", "нет OBI"),
-        (0.8, +1, 1_000_000, +2.0, +0.3, +0.10, "accumulation", "цена < 4 bps"),
-        (0.8, +1, 1_000_000, -5.0, +0.3, +0.10, "accumulation", "цена против"),
-        (0.8, +1, 1_000_000, None, +0.3, +0.10, "accumulation", "нет цены"),
-        (0.5, +1, 1_000_000, +10.0, +0.3, +0.10, "",             "toxic < порога"),
-        (0.8,  0, 1_000_000, +10.0, +0.3, +0.10, "accumulation", "flow_dir=0"),
-        (0.8, +1,   100_000, +10.0, +0.3, +0.10, "",             "vol < порога"),
-        (0.8, +1, 1_000_000, +4.0, +0.3, +0.10, "trend_fuel",   "ret ровно 4 bps — OK"),
-        (0.8, +1, 1_000_000, +3.99, +0.3, +0.10, "accumulation", "ret 3.99 < 4 bps"),
-    ]
-    for toxic, d, vol, ret, on, ov, exp, cmt in cases:
-        got = TS.trend_verdict(toxic, d, vol, ret, on, ov, S)
-        check(f"trend_verdict: {cmt} → {exp or 'пусто'}", got == exp, f"got={got!r}")
-
-    # Проверка OI-фильтра сквизов
-    got_sqz = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=-3.0)
-    check("trend_verdict: trend_fuel + oi_trend=-3 → accumulation", got_sqz == "accumulation", f"got={got_sqz}")
-
-    got_up = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=+2.0)
-    check("trend_verdict: trend_fuel + oi_trend=+2 → trend_fuel", got_up == "trend_fuel", f"got={got_up}")
-
-    got_none = TS.trend_verdict(0.8, +1, 1_000_000, +10.0, +0.3, +0.10, S, oi_trend=None)
-    check("trend_verdict: trend_fuel + oi_trend=None → trend_fuel", got_none == "trend_fuel", f"got={got_none}")
-
 
 # ============================================================ ignition
 def test_ignition_check():
@@ -181,14 +147,14 @@ def test_toxic_signals():
         for _ in range(5):
             sc.tick("binance", sym, 100.0, 1000.0, False, ts)
 
-    # первый recompute: ret=0 → accumulation
+    # первый recompute: ret=0 → accumulation (точнее acc_long, так как BUY)
     ts1 = t0 + 3600.0 + 10.0
     sc.recompute(lambda s, n: 0.0, lambda s, d: None, lambda s: (+0.5, +0.10), ts1)
     sigs1 = sc.take_signals()
     check("toxic_signals: первый сигнал", len(sigs1) == 1, len(sigs1))
     if sigs1:
-        check("toxic_signals: verdict_new = accumulation",
-              sigs1[0]["verdict_new"] == "accumulation", sigs1[0]["verdict_new"])
+        check("toxic_signals: verdict_new = acc_long",
+              sigs1[0]["verdict_new"] == "acc_long", sigs1[0]["verdict_new"])
 
     # второй recompute без смены — сигналов нет
     ts2 = ts1 + 10.0
@@ -202,17 +168,17 @@ def test_breadth():
     sc = TS.ToxicScanner(S)
     # заполним метрики вручную
     sc._metrics = {
-        "AUSDT": {"obi_now": +0.30, "obi_vel": +0.10, "verdict": "trend_fuel"},
-        "BUSDT": {"obi_now": +0.20, "obi_vel": +0.08, "verdict": ""},
-        "CUSDT": {"obi_now": -0.25, "obi_vel": -0.10, "verdict": "accumulation"},
-        "DUSDT": {"obi_now": +0.05, "obi_vel": +0.01, "verdict": ""},
-        "EUSDT": {"obi_now": None, "obi_vel": None, "verdict": ""},
+        "AUSDT": {"obi_now": +0.30, "obi_vel": +0.10, "coin_state": "trend_up"},
+        "BUSDT": {"obi_now": +0.20, "obi_vel": +0.08, "coin_state": "flat"},
+        "CUSDT": {"obi_now": -0.25, "obi_vel": -0.10, "coin_state": "acc_short"},
+        "DUSDT": {"obi_now": +0.05, "obi_vel": +0.01, "coin_state": "flat"},
+        "EUSDT": {"obi_now": None, "obi_vel": None, "coin_state": "flat"},
     }
     b = sc.breadth()
     check("breadth: long_pressure = 2", b["long_pressure"] == 2, b["long_pressure"])
     check("breadth: short_pressure = 1", b["short_pressure"] == 1, b["short_pressure"])
-    check("breadth: trend_fuel = 1", b["trend_fuel"] == 1, b["trend_fuel"])
-    check("breadth: accumulation = 1", b["accumulation"] == 1, b["accumulation"])
+    check("breadth: trend_up = 1", b["state_counts"]["trend_up"] == 1, b["state_counts"].get("trend_up"))
+    check("breadth: acc_short = 1", b["state_counts"]["acc_short"] == 1, b["state_counts"].get("acc_short"))
     # diff = (2-1)/5 * 100 = 20.0
     check("breadth: diff_pp = 20.0", abs(b["diff_pp"] - 20.0) < 0.1, b["diff_pp"])
 
@@ -370,6 +336,61 @@ def test_oi_tracker():
           cur2 == 1050.0 and tr2 is not None and abs(tr2 - 5.0) < 0.1, f"tr2={tr2}")
 
 
+def test_states():
+    from states import CoinState, MarketState, coin_state, market_state
+    
+    # coin_state: 7 states
+    # flat (no vol/toxic)
+    c = coin_state(0.1, 0, False, None, False, None, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_flat", c == CoinState.FLAT)
+    
+    # acc_long (toxic, dir=0 or not enough price/obi)
+    c = coin_state(0.8, 1, True, 2.0, False, None, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_acc_long", c == CoinState.ACC_LONG)
+    
+    # acc_short
+    c = coin_state(0.8, -1, True, -2.0, False, None, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_acc_short", c == CoinState.ACC_SHORT)
+    
+    # trend_up (toxic, flow>0, vol_ok, ret_ok, obi_ok, oi_trend >= -1)
+    c = coin_state(0.8, 1, True, 5.0, True, 1.0, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_trend_up", c == CoinState.TREND_UP)
+    
+    # trend_down (toxic, flow<0, vol_ok, ret_ok, obi_ok, oi_trend >= -1)
+    c = coin_state(0.8, -1, True, -5.0, True, 2.0, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_trend_down", c == CoinState.TREND_DOWN)
+    
+    # squeeze_up (trend_up conditions, but oi_trend < -1.0)
+    c = coin_state(0.8, 1, True, 5.0, True, -5.0, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_squeeze_up", c == CoinState.SQUEEZE_UP)
+    
+    # squeeze_down
+    c = coin_state(0.8, -1, True, -5.0, True, -3.0, {"alert":0.7, "min_ret":4.0, "oi_drop":-1.0})
+    check("coin_squeeze_down", c == CoinState.SQUEEZE_DOWN)
+    
+    # market_state: 5 states
+    p = {"trend_frac": 0.4, "squeeze_frac": 0.3}
+    
+    # CHOP: empty or all flat
+    check("market_chop", market_state([CoinState.FLAT]*10, p) == MarketState.CHOP)
+    
+    # LONG_TREND: >= 40% TREND_UP
+    st = [CoinState.TREND_UP]*4 + [CoinState.FLAT]*6
+    check("market_long_trend", market_state(st, p) == MarketState.LONG_TREND)
+    
+    # SHORT_TREND: >= 40% TREND_DOWN
+    st = [CoinState.TREND_DOWN]*5 + [CoinState.FLAT]*5
+    check("market_short_trend", market_state(st, p) == MarketState.SHORT_TREND)
+    
+    # SQUEEZE_RISK: >= 30% squeeze (overrides trend)
+    st = [CoinState.TREND_UP]*4 + [CoinState.SQUEEZE_UP]*3 + [CoinState.FLAT]*3
+    check("market_squeeze", market_state(st, p) == MarketState.SQUEEZE_RISK)
+    
+    # MIXED: TREND_UP >= 40% AND TREND_DOWN >= 40% (edge case) or not enough trend/squeeze but not all flat
+    st = [CoinState.TREND_UP]*4 + [CoinState.TREND_DOWN]*4 + [CoinState.FLAT]*2
+    check("market_mixed", market_state(st, p) == MarketState.MIXED)
+
+
 # ============================================================ main
 def main():
     test_settings()
@@ -377,7 +398,6 @@ def main():
     test_toxic_50_50()
     test_toxic_buckets_cap()
     test_toxic_slope()
-    test_trend_verdict()
     test_ignition_check()
     test_toxic_signals()
     test_breadth()
@@ -386,6 +406,7 @@ def main():
     test_engine_ignition_context()
     test_engine_robustness()
     test_oi_tracker()
+    test_states()
     test_integrity()
 
     bad = [n for n, ok in RESULTS if not ok]

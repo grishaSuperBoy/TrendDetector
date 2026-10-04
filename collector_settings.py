@@ -26,7 +26,7 @@ MANIFEST_FILE = "MANIFEST.sha256"
 CORE_FILES = (
     "engine.py", "collector_settings.py", "dashboard.py", "selfcheck.py",
     "models.py", "stream.py", "main.py", "config.py", "toxic_scanner.py",
-    "healthcheck.py", "oi_tracker.py",
+    "healthcheck.py", "oi_tracker.py", "states.py",
 )
 
 
@@ -71,6 +71,10 @@ class Settings:
     # ---- фильтр сквизов по OI
     oi_squeeze_max_drop_pct: float = -1.0  # порог падения OI за 15 мин для даунгрейда trend_fuel -> accumulation
 
+    # ---- пороги market/coin state
+    trend_frac: float = 0.4    # доля TREND_* монет для LONG/SHORT_TREND
+    squeeze_frac: float = 0.3  # доля SQUEEZE_* монет для SQUEEZE_RISK
+
 
 _RANGES = {
     "toxic_alert": (0.5, 0.95),
@@ -90,6 +94,8 @@ _RANGES = {
     "dash_port": (1024, 65535),
     "min_vol_24h_usd": (0.0, 10_000_000_000.0),
     "oi_squeeze_max_drop_pct": (-10.0, 0.0),
+    "trend_frac": (0.1, 1.0),
+    "squeeze_frac": (0.1, 1.0),
 }
 
 
